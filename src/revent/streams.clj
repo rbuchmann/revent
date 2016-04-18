@@ -52,5 +52,7 @@
       (fire! [_ event]
         (fire! ch (f event))))))
 
-(defn atom-sink [a f]
+(def make chan)
+
+(defn atom-sink [f a]
   (partial swap! a f))
