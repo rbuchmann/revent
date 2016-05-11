@@ -1,58 +1,62 @@
 (ns revent.streams
   (:require [clojure.core.async :as async :refer [go <! >! put! take! chan]]))
 
-(defprotocol EventStreamer
-  (pipe! [this target])
-  (done! [this]))
+(defprotocol Source
+  (to-source [this]))
 
-(defprotocol EventAcceptor
-  (fire! [this event]))
+(defprotocol Sink
+  (to-sink [this]))
+
+(defprotocol Pipe
+  (to-pipe [this]))
 
 (defmacro for-chan [[value ch] & body]
   `(async/go-loop []
      (when-some [~value (<! ~ch)]
        ~@body
-       (recur)))) ;; TODO: Test if this still works in new async
+       (recur))))
 
 (extend-type clojure.core.async.impl.channels.ManyToManyChannel
-  EventStreamer
-  (pipe! [this target]
-    (for-chan [v this]
-              (fire! target v)))
-  (done! [this] (async/close! this))
-  EventAcceptor
-  (fire! [this event]
-    (put! this event)))
+  Source
+  (to-source [this] this)
+  Sink
+  (to-sink [this] this)
+  Pipe
+  (to-sink [this] [this this]))
 
 (extend-type clojure.lang.IFn
-  EventAcceptor
-  (fire! [f event]
-    (f event)))
+  Sink
+  (to-sink [f]
+    (let [in (chan)]
+      (for-chan [v in]
+                (f v))
+      in))
+  Source
+  (to-source [f]
+    (async/to-chan (f)))
+  Pipe
+  (to-pipe [f]
+    (chan 1 (map f))))
 
 (extend-type clojure.lang.IPersistentVector
-  EventStreamer
-  (pipe! [s target]
-    (go
-      (doseq [item s]
-        (fire! target item))))
-  (done! [s]))
+  Source
+  (to-source [this]
+    (async/to-chan this)))
+
+(def make-system set)
 
 (defn p-> [& args]
-  (let [pairs (partition 2 1 args)]
-    (doseq [[from to] pairs]
-      (pipe! from to))))
-
-(defn map-pipe [f]
-  (let [ch (chan)]
-    (reify
-      EventStreamer
-      (pipe! [_ to] (pipe! ch to))
-      (done! [_] (done! ch))
-      EventAcceptor
-      (fire! [_ event]
-        (fire! ch (f event))))))
-
-(def make chan)
+  (if (< (count args) 2)
+    nil
+    (let [chs (map-indexed (fn [i arg]
+                             (condp = i
+                               0 (to-source arg)
+                               (-> args count dec) (to-sink arg)
+                               (to-pipe arg)))
+                           args)
+          pairs (partition 2 1 chs)]
+      (doseq [[from to] pairs]
+        (async/pipe from to)))))
 
 (defn atom-sink [f a]
   (partial swap! a f))
