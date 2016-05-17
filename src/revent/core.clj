@@ -1,59 +1,38 @@
 (ns revent.core
   (:require [clojure.core.async :refer [go <! >! chan] :as async]))
 
-(defn mix-all [mix chans]
-  (doseq [chan chans]
-    (async/admix mix chan))
-  mix)
+(defn make-system []
+  {:nodes #{}
+   :edges #{}})
 
-(defn wrap-handler [[handler-fn & {:keys [on to]}]]
-  (let [f (if on
-            (partial swap! on handler-fn)
-            handler-fn)]
-    (if to
-      (fn [event]
-        (>! to (f event)))
-      f)))
+(defn add-path [system & items]
+  (-> system
+      (update :edges into (partition 2 1 items))
+      (update :nodes into items)))
 
-(defn subscribe-handlers [pub stop handlers]
-  (doseq [[topic handler] handlers]
-    (let [f (wrap-handler handler)
-          events (chan)]
-      (async/sub pub topic events)
-      (async/go-loop []
-        (let [[val port] (async/alts!
-                           [stop
-                            events]
-                           :priority true)]
-          (when-not (= val ::stop)
-            (f val)
-            (recur)))))))
+(defn add-paths [system & paths]
+  (reduce (partial apply add-path) system paths))
 
-(defn topic-chan [pub topic]
-  (let [ch (chan)]
-    (async/sub pub topic ch)
-    ch))
+(def sconj (fnil conj #{}))
 
-(defn stop [{:keys [control]}]
-  (async/put! control ::stop))
+(defn collect-links [edges]
+  (reduce
+   (fn [m [a b]]
+     (-> m
+         (update-in [a :out]
+                    sconj b)
+         (update-in [b :in]
+                    sconj a)))
+   {}
+   edges))
 
-(defn inject-handler-deps [{:keys [state outputs]} handlers]
-  (into {} (for [[k [f & {:as opts}]] handlers]
-             (let [updated (-> opts
-                               (update :on state)
-                               (update :to outputs))]
-               [k (apply vector f (-> updated seq flatten))]))))
-
-(defn system [& {:keys [inputs outputs topic-fn state handlers] :as system-info}]
-  (let [event-chan (chan)
-        mix (async/mix event-chan)
-        event-pub (async/pub event-chan (or topic-fn :topic))
-        control (chan)
-        control-pub (async/pub control :topic)]
-    (mix-all mix inputs)
-    (subscribe-handlers event-pub
-                        (topic-chan control-pub :stop)
-                        (inject-handler-deps system-info handlers))
-    (assoc system-info
-           :control control
-           :mix mix)))
+(defn build! [system & {:keys [provide missing-fn]}]
+  (let [missing-fn (or missing-fn (fn [_] (chan)))
+        {:keys [nodes edges]} system
+        substitute-map (into {}
+                             (for [needed (filter keyword? nodes)]
+                               [needed (get provide
+                                            needed
+                                            (missing-fn needed))]))
+        links (collect-links edges)]
+    links))
