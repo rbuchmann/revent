@@ -22,7 +22,7 @@
   Sink
   (to-sink [this] this)
   Pipe
-  (to-sink [this] [this this]))
+  (to-pipe [this] this))
 
 (extend-type clojure.lang.IFn
   Sink

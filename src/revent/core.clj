@@ -1,38 +1,67 @@
 (ns revent.core
-  (:require [clojure.core.async :refer [go <! >! chan] :as async]))
+  (:require [clojure.core.async :refer [go <! >! chan] :as async]
+            [revent.streams     :as streams]))
+
+(def to-pipe streams/to-pipe)
+
+(def to-sink streams/to-sink)
+
+(def to-source streams/to-source)
 
 (defn make-system []
-  {:nodes #{}
-   :edges #{}})
+  #{})
 
 (defn add-path [system & items]
-  (-> system
-      (update :edges into (partition 2 1 items))
-      (update :nodes into items)))
+  (into system (partition 2 1 items)))
 
 (defn add-paths [system & paths]
   (reduce (partial apply add-path) system paths))
 
-(def sconj (fnil conj #{}))
+(def conj-set (fnil conj #{}))
 
 (defn collect-links [edges]
   (reduce
    (fn [m [a b]]
      (-> m
          (update-in [a :out]
-                    sconj b)
+                    conj-set b)
          (update-in [b :in]
-                    sconj a)))
+                    conj-set a)))
    {}
    edges))
 
+(defn maybe-substitute [k provide default]
+  (if (keyword? k)
+    (get provide k default)
+    k))
+
+(defn implementation-map [links provide missing-fn]
+  (into {}
+        (for [[k {:keys [in out]}] links
+              :let [sub (partial maybe-substitute k provide)]]
+          [k (condp = 0
+               (count in) (to-source (sub (missing-fn :source)))
+               (count out) (to-sink (sub (missing-fn :sink)))
+               (to-pipe (sub (missing-fn :pipe))))])))
+
+(defn nodes [system]
+  (->> system
+       (apply concat)
+       set))
+
+(defn link-all! [links im]
+  (doseq [[k {:keys [out]}] links]
+    (if (= 1 (count out))
+      (do
+        (async/pipe (im k)
+                    (im (first out))))
+      (let [t (async/mult (im k))]
+        (doseq [out-chan (map im out)]
+          (async/tap t out-chan))))))
+
 (defn build! [system & {:keys [provide missing-fn]}]
   (let [missing-fn (or missing-fn (fn [_] (chan)))
-        {:keys [nodes edges]} system
-        substitute-map (into {}
-                             (for [needed (filter keyword? nodes)]
-                               [needed (get provide
-                                            needed
-                                            (missing-fn needed))]))
-        links (collect-links edges)]
-    links))
+        links (collect-links system)
+        im (implementation-map links provide missing-fn)]
+    (link-all! links im)
+    im))
