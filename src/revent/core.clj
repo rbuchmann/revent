@@ -52,16 +52,17 @@
 (defn link-all! [links im]
   (doseq [[k {:keys [out]}] links]
     (if (= 1 (count out))
-      (do
-        (async/pipe (im k)
-                    (im (first out))))
-      (let [t (async/mult (im k))]
-        (doseq [out-chan (map im out)]
-          (async/tap t out-chan))))))
+      (async/pipe (im k)
+                  (im (first out)))
+      (when (> (count out) 0)
+        (let [t (async/mult (im k))]
+          (doseq [out-chan (map im out)]
+            (async/tap t out-chan)))))))
 
 (defn build! [system & {:keys [provide missing-fn]}]
-  (let [missing-fn (or missing-fn (fn [_] (chan)))
+  (let [missing-fn (or missing-fn (fn [k] (chan)))
         links (collect-links system)
         im (implementation-map links provide missing-fn)]
     (link-all! links im)
-    im))
+    {:implementation im
+     :system system}))

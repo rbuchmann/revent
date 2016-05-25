@@ -1,7 +1,8 @@
 (ns revent.core-test
   (:require [clojure.core.async :refer [go chan <! >! <!! ] :as async]
             [clojure.test       :refer :all]
-            [revent.core        :as revent]))
+            [revent.core        :as revent]
+            [clojure.pprint     :refer [pprint]]))
 
 (deftest collect-links-test
   (let [edges [[:a :b] [:b :c] [:b :d]]
@@ -32,12 +33,12 @@
     (is (= (<!! c) 1))))
 
 (deftest build-simple-system
-  (let [{:keys [in out] :as m} (revent/build!
-                          (revent/add-path (revent/make-system)
-                                           :in inc :out))]
-    (println (m inc))
-    (println "retval!" (async/put! (m inc) 1))
-    (is (= (<!! (m inc)) 2))))
+  (let [{{:keys [in out] :as m} :implementation :as system}
+        (revent/build!
+         (revent/add-path (revent/make-system)
+                          :in inc :out))]
+    (async/>!! in 1)
+    (is (= (<!! out) 2))))
 
 (deftest build-system-test
   (let [a (atom 0)
